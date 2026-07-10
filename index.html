@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Comptabilite familiale - Marie-Laure et Bernard</title>
 <!--
-  VERSION : v12 - 07/07/2026
+  VERSION : v13 - 07/07/2026
   Cumule :
     - v5 (base) : journal, previsionnel, echeances, KV sync
     - v6 : dashboard 3 colonnes + correctif double-soustraction echeances (sldC)
@@ -14,16 +14,13 @@
     - v9 : rapprochement bancaire (pointage) + vue unifiee "Prochaines echeances"
     - v10 : budget mensuel par categorie de depense
     - v11 : recap fiscal annuel (categories marquees "Fiscal")
-    - v12 : historique du decouvert. Fonction generique soldeAuJour(nom,cutoff)
-            (sldCReel devient un simple appel avec cutoff=aujourd'hui) +
-            historiqueDecouvert(nom,nbMois) qui compte, jour par jour, le
-            nombre de jours en decouvert autorise / en danger sur chaque mois.
-            Nouvelle carte "Jours en decouvert par mois (6 derniers mois)" sur
-            la page Analyses, visible uniquement pour les comptes ayant un
-            decouvert autorise configure (v8). Jamais de jours futurs comptes.
-  Fichiers precedents (v5 a v11) : a ne plus utiliser.
+    - v12 : historique du decouvert (jours en decouvert/danger par mois)
+    - v13 : recherche par plage de montant (min / max) dans le Journal, en
+            plus des filtres existants (personne, compte, type, pointage,
+            mois, texte). Deux champs numeriques dans la barre de filtres.
+  Fichiers precedents (v5 a v12) : a ne plus utiliser.
 -->
-<meta name="app-version" content="v12-2026-07-07">
+<meta name="app-version" content="v13-2026-07-07">
 <style>
 :root{--bg:#F7F5F0;--surf:#fff;--s2:#F0EDE6;--border:#E2DDD4;--text:#1A1814;--t2:#6B6560;--t3:#A09A93;--ml:#3C3489;--mll:#EEEDFE;--b:#085041;--bl:#E1F5EE;--green:#1D9E75;--gl:#EAF3DE;--red:#D85A30;--rl:#FAECE7;--blue:#378ADD;--bll:#E6F1FB;--amber:#BA7517;--al:#FAEEDA;--purple:#7B3FA0;--pl:#F3E8FF;--r:10px;--rs:6px;}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -109,7 +106,7 @@ tr:hover td{background:var(--s2)}tr:last-child td{border-bottom:none}
     <div class="logo-title">Comptabilite familiale</div>
     <div class="logo-sub">Marie-Laure &amp; Bernard</div>
     <div class="logo-badges"><span class="badge bml">ML</span><span class="badge bb">B</span></div>
-    <div style="font-size:9px;color:var(--t3);margin-top:4px;font-weight:600">v12 &bull; 07/07/2026</div>
+    <div style="font-size:9px;color:var(--t3);margin-top:4px;font-weight:600">v13 &bull; 07/07/2026</div>
     <div id="sync-indicator" class="sync-status sync-pending">&#9679; Connexion...</div>
   </div>
   <nav class="nav">
@@ -189,6 +186,8 @@ tr:hover td{background:var(--s2)}tr:last-child td{border-bottom:none}
     <select id="jft" onchange="renderJ()"><option value="">Tous types</option><option value="Revenu">Revenus</option><option value="Depense">Depenses</option><option value="Transfert">Transferts</option></select>
     <select id="jfpt" onchange="renderJ()"><option value="">Pointees + non pointees</option><option value="oui">Pointees uniquement</option><option value="non">Non pointees uniquement</option></select>
     <input type="month" id="jfm" onchange="renderJ()">
+    <input type="number" id="jfmin" placeholder="Montant min €" step="0.01" oninput="renderJ()" style="width:110px">
+    <input type="number" id="jfmax" placeholder="Montant max €" step="0.01" oninput="renderJ()" style="width:110px">
     <input type="text" id="jfs" placeholder="Rechercher..." oninput="renderJ()" style="flex:1;min-width:120px">
   </div>
   <div class="card tw"><table><thead><tr><th>Date</th><th>Qui</th><th>Compte</th><th>Type</th><th>Libelle</th><th>Mode</th><th>Ech.</th><th class="r">Montant</th><th style="text-align:center">Pointe</th><th></th></tr></thead><tbody id="jbody"></tbody></table></div>
@@ -455,7 +454,7 @@ function editOp(id){const op=D.ops.find(o=>o.id===id);if(!op)return;eid=id;showP
 function delOp(id){if(!confirm('Supprimer ?'))return;D.ops=D.ops.filter(o=>o.id!==id);D.paiements=D.paiements.filter(p=>p.id!==id);save();renderJ();ntf('Supprimee.');}
 
 function initSels(){const jfc=document.getElementById('jfc');if(jfc.options.length<2)allC().forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=c;jfc.appendChild(o);});const tfc=document.getElementById('tfc');if(tfc&&tfc.options.length<2)allC().forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=c;tfc.appendChild(o);});}
-function renderJ(){initSels();const fp=document.getElementById('jfp').value,fc=document.getElementById('jfc').value,ft=document.getElementById('jft').value,fpt=document.getElementById('jfpt').value,fm=document.getElementById('jfm').value,fs=document.getElementById('jfs').value.toLowerCase();let ops=[...D.ops].filter(op=>(!fp||op.personne===fp)&&(!fc||op.compte===fc)&&(!ft||op.type===ft)&&(!fpt||(fpt==='oui'?!!op.pointee:!op.pointee))&&(!fm||op.date.startsWith(fm))&&(!fs||[(op.libelle||''),(op.cat||''),(op.note||'')].join(' ').toLowerCase().includes(fs))).sort((a,b)=>b.date.localeCompare(a.date));let tot=0;document.getElementById('jbody').innerHTML=ops.map(op=>{const isML=op.personne==='Marie-Laure';const s=op.type==='Revenu'?1:op.type==='Depense'?-1:0;tot+=s*op.montant;const cls=op.type==='Revenu'?'var(--green)':op.type==='Depense'?'var(--red)':'var(--blue)';const sign=op.type==='Revenu'?'+':op.type==='Depense'?'-':'';const tb=op.type==='Revenu'?'brev':op.type==='Depense'?'bdep':'btrf';const echInfo=op.echeances>1?`<span style="font-size:10px;color:var(--purple)"> &#128179;1/${op.echeances}</span>`:'';return`<tr><td style="font-size:12px">${fmtD(op.date)}</td><td><span class="badge ${isML?'bml':'bb'}">${isML?'ML':'B'}</span></td><td style="font-size:12px">${op.compte}</td><td><span class="badge ${tb}">${op.type}</span></td><td>${op.libelle||op.cat||'--'}${echInfo}</td><td style="font-size:12px;color:var(--t3)">${op.type!=='Transfert'?(op.mode||'--'):''}</td><td style="text-align:center;font-size:12px">${op.echeances>1?op.echeances:'--'}</td><td style="text-align:right;font-weight:700;color:${cls}">${sign}${Math.abs(op.montant).toFixed(2)} &#8364;</td><td style="text-align:center"><input type="checkbox" ${op.pointee?'checked':''} onchange="togglePointee(${op.id})" title="Pointe / verifie sur le relevé"></td><td style="white-space:nowrap"><button class="ib" onclick="editOp(${op.id})">&#9998;</button><button class="ib d" onclick="delOp(${op.id})">&#128465;</button></td></tr>`;}).join('')||'<tr><td colspan="10" style="text-align:center;padding:1.5rem;color:var(--t3)">Aucune operation</td></tr>';const nbPointees=ops.filter(op=>op.pointee).length;document.getElementById('jfoot').innerHTML=`<span>${ops.length} operation(s) &bull; ${nbPointees} pointee(s)</span><span style="font-weight:700;color:${tot>=0?'var(--green)':'var(--red)'}">Solde filtre : ${tot>=0?'+':''}${tot.toFixed(2)} &#8364;</span>`;}
+function renderJ(){initSels();const fp=document.getElementById('jfp').value,fc=document.getElementById('jfc').value,ft=document.getElementById('jft').value,fpt=document.getElementById('jfpt').value,fm=document.getElementById('jfm').value,fmin=parseFloat(document.getElementById('jfmin').value),fmax=parseFloat(document.getElementById('jfmax').value),fs=document.getElementById('jfs').value.toLowerCase();let ops=[...D.ops].filter(op=>(!fp||op.personne===fp)&&(!fc||op.compte===fc)&&(!ft||op.type===ft)&&(!fpt||(fpt==='oui'?!!op.pointee:!op.pointee))&&(!fm||op.date.startsWith(fm))&&(isNaN(fmin)||op.montant>=fmin)&&(isNaN(fmax)||op.montant<=fmax)&&(!fs||[(op.libelle||''),(op.cat||''),(op.note||'')].join(' ').toLowerCase().includes(fs))).sort((a,b)=>b.date.localeCompare(a.date));let tot=0;document.getElementById('jbody').innerHTML=ops.map(op=>{const isML=op.personne==='Marie-Laure';const s=op.type==='Revenu'?1:op.type==='Depense'?-1:0;tot+=s*op.montant;const cls=op.type==='Revenu'?'var(--green)':op.type==='Depense'?'var(--red)':'var(--blue)';const sign=op.type==='Revenu'?'+':op.type==='Depense'?'-':'';const tb=op.type==='Revenu'?'brev':op.type==='Depense'?'bdep':'btrf';const echInfo=op.echeances>1?`<span style="font-size:10px;color:var(--purple)"> &#128179;1/${op.echeances}</span>`:'';return`<tr><td style="font-size:12px">${fmtD(op.date)}</td><td><span class="badge ${isML?'bml':'bb'}">${isML?'ML':'B'}</span></td><td style="font-size:12px">${op.compte}</td><td><span class="badge ${tb}">${op.type}</span></td><td>${op.libelle||op.cat||'--'}${echInfo}</td><td style="font-size:12px;color:var(--t3)">${op.type!=='Transfert'?(op.mode||'--'):''}</td><td style="text-align:center;font-size:12px">${op.echeances>1?op.echeances:'--'}</td><td style="text-align:right;font-weight:700;color:${cls}">${sign}${Math.abs(op.montant).toFixed(2)} &#8364;</td><td style="text-align:center"><input type="checkbox" ${op.pointee?'checked':''} onchange="togglePointee(${op.id})" title="Pointe / verifie sur le relevé"></td><td style="white-space:nowrap"><button class="ib" onclick="editOp(${op.id})">&#9998;</button><button class="ib d" onclick="delOp(${op.id})">&#128465;</button></td></tr>`;}).join('')||'<tr><td colspan="10" style="text-align:center;padding:1.5rem;color:var(--t3)">Aucune operation</td></tr>';const nbPointees=ops.filter(op=>op.pointee).length;document.getElementById('jfoot').innerHTML=`<span>${ops.length} operation(s) &bull; ${nbPointees} pointee(s)</span><span style="font-weight:700;color:${tot>=0?'var(--green)':'var(--red)'}">Solde filtre : ${tot>=0?'+':''}${tot.toFixed(2)} &#8364;</span>`;}
 function togglePointee(id){const op=D.ops.find(o=>o.id===id);if(!op)return;op.pointee=!op.pointee;save();renderJ();}
 
 function renderT(){initSels();const mode=document.getElementById('tfm').value,pers=document.getElementById('tfp').value,cpt=document.getElementById('tfc').value;const ops=D.ops.filter(o=>(!pers||o.personne===pers)&&(!cpt||o.compte===cpt));const prevAll=getPE().filter(p=>(!pers||p.personne===pers));const pds=[...new Set([...ops.map(o=>o.date.slice(0,mode==='mensuel'?7:4)),...prevAll.map(p=>p.date.slice(0,mode==='mensuel'?7:4))])].sort();let cumul=Object.values(D.soldes).reduce((a,b)=>a+b,0);document.getElementById('tbody').innerHTML=pds.map(p=>{const po=ops.filter(o=>o.date.startsWith(p));const rv=po.filter(o=>o.type==='Revenu').reduce((s,o)=>s+o.montant,0);const dp=po.filter(o=>o.type==='Depense').reduce((s,o)=>s+o.montant,0);const pp=prevAll.filter(o=>o.date.startsWith(p)&&o.statut!=='Realise');const pv=pp.filter(o=>o.type==='Revenu').reduce((s,o)=>s+o.montant,0);const ps=pp.filter(o=>o.type==='Depense').reduce((s,o)=>s+o.montant,0);const dlR=rv-dp,dlT=dlR+pv-ps;cumul+=dlT;return`<tr><td style="font-weight:600">${mode==='mensuel'?fmtM(p):p}</td><td class="r" style="color:var(--green);font-weight:600">${rv>0?'+'+rv.toFixed(0)+' &#8364;':'--'}</td><td class="r" style="color:var(--red);font-weight:600">${dp>0?'-'+dp.toFixed(0)+' &#8364;':'--'}</td><td class="r" style="font-weight:700;color:${dlR>=0?'var(--green)':'var(--red)'}">${dlR>=0?'+':''}${dlR.toFixed(0)} &#8364;</td><td class="r" style="color:var(--purple)">${pv>0?'+'+pv.toFixed(0)+' &#8364;':'--'}</td><td class="r" style="color:var(--amber)">${ps>0?'-'+ps.toFixed(0)+' &#8364;':'--'}</td><td class="r" style="font-weight:700;color:${dlT>=0?'var(--green)':'var(--red)'}">${dlT>=0?'+':''}${dlT.toFixed(0)} &#8364;</td><td class="r" style="font-weight:700;color:${cumul>=0?'var(--green)':'var(--red)'}">${cumul.toFixed(0)} &#8364;</td></tr>`;}).join('')||'<tr><td colspan="8" style="text-align:center;padding:1.5rem;color:var(--t3)">Aucune donnee</td></tr>';}
