@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Comptabilite familiale - Marie-Laure et Bernard</title>
 <!--
-  VERSION : v17 - 11/07/2026
+  VERSION : v19 - 26/08/2026
   Cumule :
     - v5 (base) : journal, previsionnel, echeances, KV sync
     - v6 : dashboard 3 colonnes + correctif double-soustraction echeances (sldC)
@@ -20,17 +20,26 @@
     - v15 : validation par occurrence des previsions recurrentes (datesRealisees)
     - v16 : correctif doublons (basculerOccurrence ne cree plus d'op) +
             virgule decimale acceptee partout + reinitialiser filtres Journal
-    - v17 : correctif edition d'une operation "Cheque" : editOp() ne rappelait
-            pas updMF() apres avoir repositionne le mode de paiement, donc le
-            bloc N° cheque / date emission / date encaissement prevue restait
-            cache ET ses champs n'etaient jamais rechargés avec les valeurs
-            deja enregistrees (op.chqN/chqE/chqP). Les donnees n'etaient pas
-            perdues (toujours dans D.ops), juste invisibles/non modifiables
-            a l'ecran d'edition. Corrige : le bloc s'affiche desormais et se
-            pre-remplit correctement en modification.
-  Fichiers precedents (v5 a v16) : a ne plus utiliser.
+    - v17 : correctif edition d'une operation "Cheque" (bloc N°/dates visible
+            et pre-rempli)
+    - v18 : correctif date d'impact reel d'un cheque simple (op.date =
+            date d'encaissement prevue, pas la date du champ du haut)
+    - v19 : VRAIE cause racine du souci signale apres la v18 : le bloc
+            N° cheque / dates ne s'affichait pas de facon fiable sur un
+            formulaire "Nouvelle operation", si le champ Mode paiement etait
+            deja sur "Cheque" (reste d'une saisie precedente ou restaure par
+            le navigateur) SANS que l'evenement onchange ne se declenche
+            (aucun changement de valeur detecte). Resultat : le bloc restait
+            cache, "Date encaissement prevue" restait vide, et le correctif
+            v18 ne pouvait jamais s'appliquer (rien a utiliser comme date).
+            Corrige : resetF() reinitialise desormais explicitement le mode
+            de paiement sur "CB" et rappelle updMF() a chaque reouverture du
+            formulaire (apres un enregistrement notamment) ; le chargement
+            initial de la page fait de meme, par securite face aux etats de
+            formulaire restaures par le navigateur.
+  Fichiers precedents (v5 a v18) : a ne plus utiliser.
 -->
-<meta name="app-version" content="v17-2026-07-11">
+<meta name="app-version" content="v19-2026-08-26">
 <style>
 :root{--bg:#F7F5F0;--surf:#fff;--s2:#F0EDE6;--border:#E2DDD4;--text:#1A1814;--t2:#6B6560;--t3:#A09A93;--ml:#3C3489;--mll:#EEEDFE;--b:#085041;--bl:#E1F5EE;--green:#1D9E75;--gl:#EAF3DE;--red:#D85A30;--rl:#FAECE7;--blue:#378ADD;--bll:#E6F1FB;--amber:#BA7517;--al:#FAEEDA;--purple:#7B3FA0;--pl:#F3E8FF;--r:10px;--rs:6px;}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -129,7 +138,7 @@ tr:hover td{background:var(--s2)}tr:last-child td{border-bottom:none}
     <div class="logo-title">Comptabilite familiale</div>
     <div class="logo-sub">Marie-Laure &amp; Bernard</div>
     <div class="logo-badges"><span class="badge bml">ML</span><span class="badge bb">B</span></div>
-    <div style="font-size:9px;color:var(--t3);margin-top:4px;font-weight:600">v17 &bull; 11/07/2026</div>
+    <div style="font-size:9px;color:var(--t3);margin-top:4px;font-weight:600">v19 &bull; 26/08/2026</div>
     <button class="btn btn-sm" onclick="exportPDF()" style="margin-top:6px;width:100%;justify-content:center">&#128424; Exporter en PDF</button>
     <div id="sync-indicator" class="sync-status sync-pending">&#9679; Connexion...</div>
   </div>
@@ -492,12 +501,12 @@ function saveOp(){
   const montant1=type==='Depense'&&echeances>1?parseFloat((montantTotal/echeances).toFixed(2)):montantTotal;
   const op={id:eid||D.nextId++,date,personne,compte,type,montant:montant1,note:document.getElementById('f-note').value||''};
   if(type==='Revenu'){op.cat=document.getElementById('f-cat').value;op.libelle=op.cat;op.mode='Virement';op.echeances=1;}
-  else if(type==='Depense'){op.cat=document.getElementById('f-cat').value;op.libelle=document.getElementById('f-lib').value||op.cat;op.mode=document.getElementById('f-mode').value;op.echeances=echeances;if(op.mode==='Cheque'){op.chqN=document.getElementById('f-chqn').value;op.chqE=document.getElementById('f-chqe').value;op.chqP=document.getElementById('f-chqp').value;}if(echeances>1&&!eid){const pt=montantTotal/echeances;const es=[];for(let i=0;i<echeances;i++){const d=new Date(date);d.setMonth(d.getMonth()+i);es.push({num:i+1,montant:parseFloat(pt.toFixed(2)),date:d.toISOString().slice(0,10),payee:i===0});}D.paiements.push({id:op.id,libelle:op.libelle,personne,compte,type:op.mode,cat:op.cat,total:montantTotal,nb:echeances,echeances:es,createdAt:date});}if(!D.fournisseurs.includes(op.libelle)&&op.libelle)D.fournisseurs.push(op.libelle);}
+  else if(type==='Depense'){op.cat=document.getElementById('f-cat').value;op.libelle=document.getElementById('f-lib').value||op.cat;op.mode=document.getElementById('f-mode').value;op.echeances=echeances;if(op.mode==='Cheque'){op.chqN=document.getElementById('f-chqn').value;op.chqE=document.getElementById('f-chqe').value;op.chqP=document.getElementById('f-chqp').value;if(echeances<=1&&op.chqP){op.date=op.chqP;}}if(echeances>1&&!eid){const pt=montantTotal/echeances;const es=[];for(let i=0;i<echeances;i++){const d=new Date(date);d.setMonth(d.getMonth()+i);es.push({num:i+1,montant:parseFloat(pt.toFixed(2)),date:d.toISOString().slice(0,10),payee:i===0});}D.paiements.push({id:op.id,libelle:op.libelle,personne,compte,type:op.mode,cat:op.cat,total:montantTotal,nb:echeances,echeances:es,createdAt:date});}if(!D.fournisseurs.includes(op.libelle)&&op.libelle)D.fournisseurs.push(op.libelle);}
   else if(type==='Transfert'){op.compteDest=document.getElementById('f-dest').value;op.natureTrf=document.getElementById('f-trf').value;op.libelle=op.natureTrf;op.echeances=1;}
   if(eid){const i=D.ops.findIndex(o=>o.id===eid);if(i>-1)D.ops[i]=op;eid=null;}else D.ops.push(op);
   save();resetF();ntf('Enregistre et synchronise !');showPage('dashboard');
 }
-function resetF(){eid=null;document.getElementById('saisie-title').textContent='Nouvelle operation';document.getElementById('f-date').value=new Date().toISOString().slice(0,10);document.getElementById('f-personne').value='Marie-Laure';document.getElementById('f-type').value='Depense';updFC();updFT();document.getElementById('f-mt').value='';document.getElementById('f-note').value='';document.getElementById('f-lib').value='';document.getElementById('f-ech').value='1';}
+function resetF(){eid=null;document.getElementById('saisie-title').textContent='Nouvelle operation';document.getElementById('f-date').value=new Date().toISOString().slice(0,10);document.getElementById('f-personne').value='Marie-Laure';document.getElementById('f-type').value='Depense';document.getElementById('f-mode').value='CB';updFC();updFT();updMF();document.getElementById('f-mt').value='';document.getElementById('f-note').value='';document.getElementById('f-lib').value='';document.getElementById('f-ech').value='1';}
 function editOp(id){const op=D.ops.find(o=>o.id===id);if(!op)return;eid=id;showPage('saisie');document.getElementById('saisie-title').textContent="Modifier l'operation";document.getElementById('f-date').value=op.date;document.getElementById('f-personne').value=op.personne;updFC();document.getElementById('f-type').value=op.type;updFT();document.getElementById('f-compte').value=op.compte;document.getElementById('f-mt').value=op.echeances>1?op.montant*op.echeances:op.montant;document.getElementById('f-note').value=op.note||'';if(op.type==='Depense'){document.getElementById('f-cat').value=op.cat||'';document.getElementById('f-lib').value=op.libelle||'';document.getElementById('f-mode').value=op.mode||'CB';document.getElementById('f-ech').value=op.echeances||1;updMF();if(op.mode==='Cheque'){document.getElementById('f-chqn').value=op.chqN||'';document.getElementById('f-chqe').value=op.chqE||'';document.getElementById('f-chqp').value=op.chqP||'';}}if(op.type==='Revenu')document.getElementById('f-cat').value=op.cat||'';if(op.type==='Transfert'){document.getElementById('f-dest').value=op.compteDest||'';document.getElementById('f-trf').value=op.natureTrf||'';}}
 function delOp(id){if(!confirm('Supprimer ?'))return;D.ops=D.ops.filter(o=>o.id!==id);D.paiements=D.paiements.filter(p=>p.id!==id);save();renderJ();ntf('Supprimee.');}
 
@@ -571,7 +580,7 @@ document.addEventListener('DOMContentLoaded',async function(){
     document.getElementById('f-date').value=new Date().toISOString().slice(0,10);
     document.getElementById('f-chqe').value=new Date().toISOString().slice(0,10);
     document.getElementById('pf-date').value=new Date().toISOString().slice(0,10);
-    updFC();updFT();fillCats();updPFC();updNPC();renderD();
+    updFC();updFT();updMF();fillCats();updPFC();updNPC();renderD();
   }catch(e){console.error('Init error:',e);}
 });
 </script>
