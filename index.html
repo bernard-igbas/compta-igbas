@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Comptabilite familiale - Marie-Laure et Bernard</title>
 <!--
-  VERSION : v20 - 11/11/2026
+  VERSION : v21 - 11/11/2026
   Cumule :
     - v5 (base) : journal, previsionnel, echeances, KV sync
     - v6 : dashboard 3 colonnes + correctif double-soustraction echeances (sldC)
@@ -56,9 +56,29 @@
             la vue "Prochaines echeances (30 jours)" du dashboard
             (getEcheancesAvenir), qui melangeait deja les deux sources
             pour l'affichage mais pas pour les totaux chiffres.
-  Fichiers precedents (v5 a v19) : a ne plus utiliser.
+    - v21 : (1) auto-traitement des echeances de paiements fractionnes :
+            des qu'une echeance (2/4, 3/4...) atteint sa date, elle devient
+            desormais automatiquement une vraie ligne du Journal au
+            chargement de l'appli (nouvelle fonction autoTraiterEcheancesDues,
+            appelee une fois au demarrage) - demande explicite de Bernard,
+            qui ne veut plus cliquer "Payer" a la main pour un engagement
+            deja pris en une fois (contrairement aux previsions recurrentes,
+            ou la saisie manuelle reste volontairement inchangee). Le bouton
+            "Payer" de la page Paiements reste disponible pour valider une
+            echeance en avance si besoin.
+            (2) correctif de synchronisation lors de la modification d'un
+            paiement fractionne deja enregistre : corriger le montant d'une
+            operation en plusieurs fois (crayon dans le Journal) ne touchait
+            jusqu'ici que la ligne du Journal elle-meme ; le detail des
+            echeances futures restantes, stocke a part dans D.paiements,
+            gardait l'ancien montant errone indefiniment. saveOp() recalcule
+            desormais ce detail a chaque modification : les echeances deja
+            payees (hors la toute premiere, mise a jour avec la correction en
+            cours) restent inchangees, le reste du nouveau montant total est
+            reparti sur les echeances encore a venir.
+  Fichiers precedents (v5 a v20) : a ne plus utiliser.
 -->
-<meta name="app-version" content="v20-2026-11-11">
+<meta name="app-version" content="v21-2026-11-11">
 <style>
 :root{--bg:#F7F5F0;--surf:#fff;--s2:#F0EDE6;--border:#E2DDD4;--text:#1A1814;--t2:#6B6560;--t3:#A09A93;--ml:#3C3489;--mll:#EEEDFE;--b:#085041;--bl:#E1F5EE;--green:#1D9E75;--gl:#EAF3DE;--red:#D85A30;--rl:#FAECE7;--blue:#378ADD;--bll:#E6F1FB;--amber:#BA7517;--al:#FAEEDA;--purple:#7B3FA0;--pl:#F3E8FF;--r:10px;--rs:6px;}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -157,7 +177,7 @@ tr:hover td{background:var(--s2)}tr:last-child td{border-bottom:none}
     <div class="logo-title">Comptabilite familiale</div>
     <div class="logo-sub">Marie-Laure &amp; Bernard</div>
     <div class="logo-badges"><span class="badge bml">ML</span><span class="badge bb">B</span></div>
-    <div style="font-size:9px;color:var(--t3);margin-top:4px;font-weight:600">v20 &bull; 11/11/2026</div>
+    <div style="font-size:9px;color:var(--t3);margin-top:4px;font-weight:600">v21 &bull; 11/11/2026</div>
     <button class="btn btn-sm" onclick="exportPDF()" style="margin-top:6px;width:100%;justify-content:center">&#128424; Exporter en PDF</button>
     <div id="sync-indicator" class="sync-status sync-pending">&#9679; Connexion...</div>
   </div>
@@ -522,7 +542,7 @@ function saveOp(){
   const montant1=type==='Depense'&&echeances>1?parseFloat((montantTotal/echeances).toFixed(2)):montantTotal;
   const op={id:eid||D.nextId++,date,personne,compte,type,montant:montant1,note:document.getElementById('f-note').value||''};
   if(type==='Revenu'){op.cat=document.getElementById('f-cat').value;op.libelle=op.cat;op.mode='Virement';op.echeances=1;}
-  else if(type==='Depense'){op.cat=document.getElementById('f-cat').value;op.libelle=document.getElementById('f-lib').value||op.cat;op.mode=document.getElementById('f-mode').value;op.echeances=echeances;if(op.mode==='Cheque'){op.chqN=document.getElementById('f-chqn').value;op.chqE=document.getElementById('f-chqe').value;op.chqP=document.getElementById('f-chqp').value;if(echeances<=1&&op.chqP){op.date=op.chqP;}}if(echeances>1&&!eid){const pt=montantTotal/echeances;const es=[];for(let i=0;i<echeances;i++){const d=new Date(date);d.setMonth(d.getMonth()+i);es.push({num:i+1,montant:parseFloat(pt.toFixed(2)),date:d.toISOString().slice(0,10),payee:i===0});}D.paiements.push({id:op.id,libelle:op.libelle,personne,compte,type:op.mode,cat:op.cat,total:montantTotal,nb:echeances,echeances:es,createdAt:date});}if(!D.fournisseurs.includes(op.libelle)&&op.libelle)D.fournisseurs.push(op.libelle);}
+  else if(type==='Depense'){op.cat=document.getElementById('f-cat').value;op.libelle=document.getElementById('f-lib').value||op.cat;op.mode=document.getElementById('f-mode').value;op.echeances=echeances;if(op.mode==='Cheque'){op.chqN=document.getElementById('f-chqn').value;op.chqE=document.getElementById('f-chqe').value;op.chqP=document.getElementById('f-chqp').value;if(echeances<=1&&op.chqP){op.date=op.chqP;}}if(echeances>1){const exIdx=D.paiements.findIndex(pm=>pm.id===op.id);if(exIdx>-1){const old=D.paiements[exIdx];const paidOnes=old.echeances.filter(e=>e.payee).map(e=>e.num===1?{...e,montant:montant1,date:op.date}:e).sort((a,b)=>a.num-b.num);const nbFinal=Math.max(echeances,paidOnes.length);const sumPaid=paidOnes.reduce((s,e)=>s+e.montant,0);const nbUnpaid=nbFinal-paidOnes.length;const remaining=montantTotal-sumPaid;const ptU=nbUnpaid>0?remaining/nbUnpaid:0;const baseDate=old.createdAt||date;const es=paidOnes.map(e=>({...e}));for(let i=0;i<nbUnpaid;i++){const num=paidOnes.length+i+1;const d=new Date(baseDate);d.setMonth(d.getMonth()+(num-1));es.push({num,montant:parseFloat(ptU.toFixed(2)),date:d.toISOString().slice(0,10),payee:false});}D.paiements[exIdx]={...old,libelle:op.libelle,personne,compte,type:op.mode,cat:op.cat,total:montantTotal,nb:nbFinal,echeances:es};}else{const pt=montantTotal/echeances;const es=[];for(let i=0;i<echeances;i++){const d=new Date(date);d.setMonth(d.getMonth()+i);es.push({num:i+1,montant:parseFloat(pt.toFixed(2)),date:d.toISOString().slice(0,10),payee:i===0});}D.paiements.push({id:op.id,libelle:op.libelle,personne,compte,type:op.mode,cat:op.cat,total:montantTotal,nb:echeances,echeances:es,createdAt:date});}}else{const exIdx=D.paiements.findIndex(pm=>pm.id===op.id);if(exIdx>-1)D.paiements.splice(exIdx,1);}if(!D.fournisseurs.includes(op.libelle)&&op.libelle)D.fournisseurs.push(op.libelle);}
   else if(type==='Transfert'){op.compteDest=document.getElementById('f-dest').value;op.natureTrf=document.getElementById('f-trf').value;op.libelle=op.natureTrf;op.echeances=1;}
   if(eid){const i=D.ops.findIndex(o=>o.id===eid);if(i>-1)D.ops[i]=op;eid=null;}else D.ops.push(op);
   save();resetF();ntf('Enregistre et synchronise !');showPage('dashboard');
@@ -575,6 +595,26 @@ function prevNP(){const tot=pF('np-tot'),nb=parseInt(document.getElementById('np
 function saveP(){const lib=document.getElementById('np-lib').value||'Sans libelle',pers=document.getElementById('np-pers').value,cpt=document.getElementById('np-cpt').value,tot=pF('np-tot'),nb=parseInt(document.getElementById('np-nb').value)||1,mode=document.getElementById('np-mode').value,cat=document.getElementById('np-cat').value;if(!tot){ntf('Montant obligatoire');return;}const pt=parseFloat((tot/nb).toFixed(2));const es=[];for(let i=0;i<nb;i++){const di=document.getElementById('npd-'+i);es.push({num:i+1,montant:pt,date:di?di.value:'',payee:i===0});}const op={id:D.nextId++,date:es[0].date,personne:pers,compte:cpt,type:'Depense',cat,libelle:lib,montant:pt,mode,echeances:nb,note:''};D.ops.push(op);D.paiements.push({id:op.id,libelle:lib,personne:pers,compte:cpt,type:mode,cat,total:tot,nb,echeances:es,createdAt:new Date().toISOString().slice(0,10)});if(!D.fournisseurs.includes(lib))D.fournisseurs.push(lib);save();togAddP();renderE();ntf('Paiement enregistre !');}
 function renderE(){if(!D.paiements.length){document.getElementById('plist').innerHTML='<div style="text-align:center;padding:2.5rem;color:var(--t3)">Aucun paiement fractionne.</div>';return;}document.getElementById('plist').innerHTML=D.paiements.map((p,pi)=>{const paid=p.echeances.filter(e=>e.payee).length,paidA=p.echeances.filter(e=>e.payee).reduce((s,e)=>s+e.montant,0),rest=p.total-paidA,isML=p.personne==='Marie-Laure';const lines=p.echeances.map((e,ei)=>{const ip=e.payee,isnx=!ip&&p.echeances.slice(0,ei).every(x=>x.payee);const st=ip?'<span style="color:var(--green);font-size:11px">&#10003; Payee</span>':isnx?'<span style="color:var(--amber);font-size:11px">A payer</span>':'<span style="color:var(--t3);font-size:11px">A venir</span>';return`<div style="display:grid;grid-template-columns:24px 1fr 90px 100px 70px 70px;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px"><div style="width:22px;height:22px;border-radius:50%;background:${ip?'var(--gl)':isnx?'var(--al)':'var(--s2)'};color:${ip?'var(--green)':isnx?'var(--amber)':'var(--t3)'};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700">${e.num}</div><div>Echeance ${e.num}/${p.nb}</div><div style="font-weight:700;color:var(--red)">${e.montant.toFixed(2)} &#8364;</div><div style="color:var(--t3)">${fmtD(e.date)}</div><div>${st}</div><div>${ip?'':`<button class="btn btn-sm" onclick="payerEch(${pi},${ei})">&#10003; Payer</button>`}</div></div>`;}).join('');return`<div class="card" style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px"><div><div style="font-size:15px;font-weight:700">${p.libelle}</div><div style="font-size:12px;color:var(--t3);margin-top:4px"><span class="badge ${isML?'bml':'bb'}" style="margin-right:6px">${isML?'ML':'B'}</span>${p.compte} &bull; ${p.type} &bull; ${p.cat}</div></div><div style="text-align:right"><div style="font-size:18px;font-weight:700;color:var(--red)">${p.total.toFixed(2)} &#8364;</div><div style="font-size:12px;color:var(--t3)">${paid}/${p.nb} payee(s) &bull; reste ${rest.toFixed(2)} &#8364;</div></div></div><div class="prog"><div class="pf" style="width:${Math.round(paid/p.nb*100)}%;background:var(--green)"></div></div><div style="display:grid;grid-template-columns:24px 1fr 90px 100px 70px 70px;gap:8px;font-size:10px;font-weight:700;color:var(--t3);padding:8px 0 4px;border-bottom:1px solid var(--border)"><span>#</span><span>Echeance</span><span>Montant</span><span>Date</span><span>Statut</span><span></span></div>${lines}<div style="text-align:right;margin-top:8px"><button class="btn btn-sm btn-d" onclick="delP(${pi})">&#128465; Supprimer</button></div></div>`;}).join('');}
 function payerEch(pi,ei){const p=D.paiements[pi];const e=p.echeances[ei];if(e.payee)return;e.payee=true;if(ei>0){const op={id:D.nextId++,date:e.date,personne:p.personne,compte:p.compte,type:'Depense',cat:p.cat,libelle:p.libelle+' ech.'+e.num+'/'+p.nb,montant:e.montant,mode:p.type,echeances:1,note:'Echeance '+e.num+'/'+p.nb};D.ops.push(op);}save();renderE();ntf('Echeance payee !');}
+function autoTraiterEcheancesDues(){
+  // Ajoute 11/11/2026 : les echeances de paiements fractionnes dont la date est
+  // arrivee (<=aujourd'hui) et pas encore marquees payees deviennent automatiquement
+  // une vraie ligne du Journal, sans action de Bernard (demande explicite, les
+  // echeances sont un engagement deja pris en une fois, contrairement aux previsions
+  // recurrentes ou Bernard saisit lui-meme chaque occurrence).
+  const today=new Date().toISOString().slice(0,10);
+  let changed=false;
+  D.paiements.forEach(p=>{
+    p.echeances.forEach(e=>{
+      if(!e.payee&&e.date<=today){
+        e.payee=true;
+        D.ops.push({id:D.nextId++,date:e.date,personne:p.personne,compte:p.compte,type:'Depense',cat:p.cat,libelle:p.libelle+' ech.'+e.num+'/'+p.nb,montant:e.montant,mode:p.type,echeances:1,note:'Echeance '+e.num+'/'+p.nb+' (auto)'});
+        changed=true;
+      }
+    });
+  });
+  if(changed)save();
+  return changed;
+}
 function delP(pi){if(!confirm('Supprimer ?'))return;D.paiements.splice(pi,1);save();renderE();}
 
 function showPT(id){['comptes','fourn','cats','soldes','donnees'].forEach(t=>document.getElementById('pt-'+t).style.display=t===id?'block':'none');document.querySelectorAll('.tsi').forEach((t,i)=>t.classList.toggle('active',['comptes','fourn','cats','soldes','donnees'][i]===id));renderPT(id);}
@@ -598,6 +638,7 @@ function clrD(){D=JSON.parse(JSON.stringify(DEF));save();renderD();showPage('das
 document.addEventListener('DOMContentLoaded',async function(){
   try{
     await loadFromKV();
+    autoTraiterEcheancesDues();
     document.getElementById('f-date').value=new Date().toISOString().slice(0,10);
     document.getElementById('f-chqe').value=new Date().toISOString().slice(0,10);
     document.getElementById('pf-date').value=new Date().toISOString().slice(0,10);
